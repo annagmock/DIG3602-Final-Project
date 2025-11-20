@@ -55,20 +55,20 @@ void loop() {
       lastStableState = stableState;
       stableState = rawState;
 
-      // Transition detected: LOW = pressed, HIGH = released (using INPUT_PULLUP)
+// Transition detected: LOW = pressed, HIGH = released (using INPUT_PULLUP)
       if (stableState == LOW) {
         // Button just pressed
         pressStartTime = now;
         digitalWrite(ledPin, HIGH); // LED on during press
         Serial.println("Pressed");
       } else {
-        // Button just released
+// Button just released
         digitalWrite(ledPin, LOW); // LED off on release
         unsigned long pressDuration = now - pressStartTime;
         Serial.print("Released. Duration (ms): ");
         Serial.println(pressDuration);
 
-        if (pressDuration <= tapThreshold) {
+  if (pressDuration <= tapThreshold) {
           // Count as a tap
           pressCount++;
           lastReleaseTime = now;

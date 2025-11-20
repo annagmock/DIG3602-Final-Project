@@ -1,5 +1,5 @@
 # DIG3602-Final-Project
-Code for the Arduino final project.
+Code for the Arduino final project:
 
 
 #include <SoftwareSerial.h>

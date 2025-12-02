@@ -5,14 +5,12 @@ FINAL WORKING CONTROLLER CODE:
 
 SoftwareSerial mySerial(3, 2); // Bluetooth TX, RX
 
-// Pins
-const int buttonPin = 4;  // Arcade button
-const int ledPin = 13;    // LED feedback
+const int buttonPin = 4;
+const int ledPin = 13;
 
-// Debounce / timing
 const unsigned long debounceDelay = 50;
-const unsigned long tapThreshold   = 300;
-const unsigned long comboTimeout   = 500;
+const unsigned long tapThreshold = 300;
+const unsigned long comboTimeout = 500;
 
 int rawState = HIGH;
 int stableState = HIGH;
@@ -24,18 +22,11 @@ unsigned long lastReleaseTime = 0;
 int pressCount = 0;
 
 bool turningActive = false;
-char turnDirection = 0;
+char activeCommand = 0;   // <- streamed every loop
 
-// ===== BURST SETTINGS =====
-const int burstCount = 80;   // spam even more if you want
-
-// Sends command AS FAST AS POSSIBLE (no delay)
-void sendBurst(const char* cmd) {
-  for (int i = 0; i < burstCount; i++) {
-    mySerial.println(cmd);
-    Serial.println(cmd);
-    // no delay, full speed spam
-  }
+void sendCmd(const char* cmd) {
+  mySerial.println(cmd);
+  Serial.println(cmd);
 }
 
 void setup() {
@@ -51,38 +42,38 @@ void loop() {
   unsigned long now = millis();
   int reading = digitalRead(buttonPin);
 
-  // ---------------- Debounce ----------------
+  // ========== DEBOUNCE ==========
   if (reading != rawState) {
     rawState = reading;
     lastDebounceTime = now;
   }
 
   if ((now - lastDebounceTime) > debounceDelay) {
+
     if (rawState != stableState) {
       lastStableState = stableState;
       stableState = rawState;
 
-      // ========== BUTTON PRESSED ==========
+      // ======== PRESSED ========
       if (stableState == LOW) {
         pressStartTime = now;
         digitalWrite(ledPin, HIGH);
       }
 
-      // ========== BUTTON RELEASED ==========
+      // ======== RELEASED ========
       else {
         digitalWrite(ledPin, LOW);
         unsigned long pressDuration = now - pressStartTime;
 
-        // If released while turning -> STOP
+        // If we were turning -> STOP that streaming
         if (turningActive) {
-          sendBurst("S");
+          activeCommand = 'S';   // stream S until next command
           turningActive = false;
-          turnDirection = 0;
           pressCount = 0;
           return;
         }
 
-        // Short press = tap
+        // Short tap
         if (pressDuration <= tapThreshold) {
           pressCount++;
           lastReleaseTime = now;
@@ -91,37 +82,44 @@ void loop() {
     }
   }
 
-  // ====== CHECK WHILE HELD FOR HOLD ACTION ======
+  // ======== HOLD DETECTION ========
   if (stableState == LOW && !turningActive) {
-    unsigned long heldTime = millis() - pressStartTime;
+    unsigned long held = now - pressStartTime;
 
-    if (heldTime > tapThreshold) {
+    if (held > tapThreshold) {
 
-      // HOLD with ZERO taps = LEFT
+      // HOLD = LEFT
       if (pressCount == 0) {
-        sendBurst("L");
+        activeCommand = 'L';
         turningActive = true;
-        turnDirection = 'L';
         return;
       }
 
-      // HOLD after 1 tap = RIGHT
+      // TAP + HOLD = RIGHT
       if (pressCount == 1) {
-        sendBurst("R");
+        activeCommand = 'R';
         turningActive = true;
-        turnDirection = 'R';
         return;
       }
     }
   }
 
-  // ====== TAP COMBO AFTER TIMEOUT ======
+  // ======== TAP COMBOS ========
   if (pressCount > 0 && (now - lastReleaseTime) > comboTimeout && !turningActive) {
 
-    if (pressCount == 1) sendBurst("F");
-    else if (pressCount == 2) sendBurst("S");
-    else if (pressCount == 3) sendBurst("B");
+    if (pressCount == 1) activeCommand = 'F';  // stream forward
+    else if (pressCount == 2) activeCommand = 'S';  // stream stop
+    else if (pressCount == 3) activeCommand = 'B';  // stream backward
 
     pressCount = 0;
+  }
+
+  // ======== CONTINUOUS STREAM (NO AUTO-STOP) ========
+  if (activeCommand) {
+    if      (activeCommand == 'L') sendCmd("L");
+    else if (activeCommand == 'R') sendCmd("R");
+    else if (activeCommand == 'F') sendCmd("F");
+    else if (activeCommand == 'S') sendCmd("S");
+    else if (activeCommand == 'B') sendCmd("B");
   }
 }

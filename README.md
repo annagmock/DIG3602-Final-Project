@@ -1,5 +1,4 @@
-# DIG3602-Final-Project
-Code for the Arduino final project:
+FINAL WORKING CONTROLLER CODE:
 
 
 #include <SoftwareSerial.h>
@@ -7,24 +6,31 @@ Code for the Arduino final project:
 SoftwareSerial mySerial(3, 2); // Bluetooth TX, RX
 
 // Pins
-const int buttonPin = 4;  // Arcade button (one side to pin4, other to GND; use INPUT_PULLUP)
+const int buttonPin = 4;  // Arcade button
 const int ledPin = 13;    // LED feedback
 
 // Debounce / timing
 const unsigned long debounceDelay = 50;   // ms
-const unsigned long tapThreshold   = 300; // max duration (ms) to count as a tap
-const unsigned long comboTimeout   = 500; // ms to wait after last release before acting on taps
+const unsigned long tapThreshold   = 300; // ms (max for tap)
+const unsigned long comboTimeout   = 500; // ms after last release
 
 // State tracking
 int rawState = HIGH;
-int stableState = HIGH;      // debounced stable state
+int stableState = HIGH;
 int lastStableState = HIGH;
 unsigned long lastDebounceTime = 0;
 
 unsigned long pressStartTime = 0;
 unsigned long lastReleaseTime = 0;
-
 int pressCount = 0;
+
+bool turningActive = false;
+char turnDirection = 0;  // 'L' or 'R'
+
+// Continuous command output
+char currentCommand = 'X';      // X = no movement
+unsigned long lastRepeat = 0;
+const unsigned long repeatInterval = 100; // send command every 100ms
 
 void setup() {
   Serial.begin(9600);
@@ -34,71 +40,128 @@ void setup() {
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, LOW);
 
-  Serial.println("Two-tap controller (debounced) ready.");
+  Serial.println("Controller Ready: left hold, tap-hold right.");
 }
 
 void loop() {
   unsigned long now = millis();
-
-  // Read raw pin
   int reading = digitalRead(buttonPin);
 
-  // If the reading changed, reset the debounce timer
+  // ---------------- Debounce ----------------
   if (reading != rawState) {
     rawState = reading;
     lastDebounceTime = now;
   }
 
-  // If the reading has been stable longer than debounceDelay, accept it as the stable state
   if ((now - lastDebounceTime) > debounceDelay) {
     if (rawState != stableState) {
       lastStableState = stableState;
       stableState = rawState;
 
-// Transition detected: LOW = pressed, HIGH = released (using INPUT_PULLUP)
+      // ========== BUTTON PRESSED ==========
       if (stableState == LOW) {
-        // Button just pressed
         pressStartTime = now;
-        digitalWrite(ledPin, HIGH); // LED on during press
+        digitalWrite(ledPin, HIGH);
         Serial.println("Pressed");
-      } else {
-// Button just released
-        digitalWrite(ledPin, LOW); // LED off on release
+      }
+
+      // ========== BUTTON RELEASED ==========
+      else {
+        digitalWrite(ledPin, LOW);
         unsigned long pressDuration = now - pressStartTime;
-        Serial.print("Released. Duration (ms): ");
+        Serial.print("Released. Duration = ");
         Serial.println(pressDuration);
 
-  if (pressDuration <= tapThreshold) {
-          // Count as a tap
+        // If released while turning -> STOP (continuous)
+        if (turningActive) {
+          Serial.println("Action: STOP TURNING");
+          mySerial.println("S");
+          currentCommand = 'S';   // <-- continuous STOP
+          turningActive = false;
+          turnDirection = 0;
+          pressCount = 0;
+          return;
+        }
+
+        // Short press = tap
+        if (pressDuration <= tapThreshold) {
           pressCount++;
           lastReleaseTime = now;
           Serial.print("Tap counted. pressCount = ");
           Serial.println(pressCount);
-        } else {
-          // It was a long press - for this simplified mode we ignore it
-          Serial.println("Long press (ignored in this mode).");
-          // Optionally reset pressCount if you want long press to cancel sequence:
-          // pressCount = 0;
+        }
+        else {
+          Serial.println("Long press ignored on release (we detect hold while pressed).");
         }
       }
     }
   }
 
-  // If we have taps and enough time has passed since last release, interpret the sequence
-  if (pressCount > 0 && (now - lastReleaseTime) > comboTimeout) {
-    if (pressCount == 1) {
-      Serial.println("Action: FORWARD (1 tap)");
-      mySerial.println("F");
-    } else if (pressCount == 2) {
-      Serial.println("Action: STOP (2 taps)");
-      mySerial.println("S");
-    } else {
-      Serial.print("Ignored sequence of ");
-      Serial.print(pressCount);
-      Serial.println(" taps.");
+  // ====== CHECK WHILE HELD FOR HOLD ACTION ======
+  if (stableState == LOW && !turningActive) {
+    unsigned long heldTime = millis() - pressStartTime;
+
+    if (heldTime > tapThreshold) {
+
+      // HOLD with ZERO taps = LEFT
+      if (pressCount == 0) {
+        Serial.println("Action: TURN LEFT (hold)");
+        mySerial.println("L");
+        currentCommand = 'L';
+        turningActive = true;
+        turnDirection = 'L';
+        return;
+      }
+
+      // HOLD after 1 tap = RIGHT
+      if (pressCount == 1) {
+        Serial.println("Action: TURN RIGHT (hold)");
+        mySerial.println("R");
+        currentCommand = 'R';
+        turningActive = true;
+        turnDirection = 'R';
+        return;
+      }
     }
-    pressCount = 0; // reset
   }
 
-  // loop fast
+  // ====== TAP COMBO AFTER TIMEOUT ======
+  if (pressCount > 0 && (now - lastReleaseTime) > comboTimeout && !turningActive) {
+    switch (pressCount) {
+
+      case 1:
+        Serial.println("Action: FORWARD (1 tap)");
+        mySerial.println("F");
+        currentCommand = 'F';
+        break;
+
+      case 2:
+        Serial.println("Action: STOP (2 taps)");
+        mySerial.println("S");
+        currentCommand = 'S';   // <-- continuous STOP
+        break;
+
+      case 3:
+        Serial.println("Action: BACK (3 taps)");
+        mySerial.println("B");
+        currentCommand = 'B';
+        break;
+
+      default:
+        Serial.print("Ignored sequence of ");
+        Serial.print(pressCount);
+        Serial.println(" taps.");
+    }
+    pressCount = 0;
+  }
+
+  // =====================================================
+  // CONTINUOUSLY SEND ACTIVE COMMAND (every 100ms)
+  // =====================================================
+  if (currentCommand != 'X' && millis() - lastRepeat > repeatInterval) {
+    mySerial.println(currentCommand);
+    Serial.print("Repeat: ");
+    Serial.println(currentCommand);
+    lastRepeat = millis();
+  }
 }
